@@ -1,3 +1,17 @@
+"""
+This Triton kernel is responsible for allocating physical memory slots (pages) in a paged KV-cache
+for newly extended tokens in variable-length sequences.
+
+The newly added tokens are divided into three parts:
+Part 1: Fill the remaining slots in the last partially filled page from the previous step.
+Part 2: Allocate full new pages if there are many new tokens.
+Part 3: Handle the final partial page if needed.
+
+The difference between the gpu and npu version is part 2 implementation.
+The NPU version uses a loop-based approach in Part 2 to conform to hardware constraints,
+while the GPU version uses full vectorized parallelism for maximum performance.
+"""
+
 import numpy as np
 import torch
 
