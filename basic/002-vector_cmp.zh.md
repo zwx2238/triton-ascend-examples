@@ -43,6 +43,7 @@ def npu_vector_cmp_kernel(
     tl.store(Mean + row, mean)
     
 -   xbar = tl.where(cols < N, X - mean, 0.0)
++   # 注释
 +   cols_cmp = cols.to(tl.float32)
 +   xbar = tl.where(cols_cmp < N, x - mean, 0.0)
 
