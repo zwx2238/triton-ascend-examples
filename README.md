@@ -1,4 +1,4 @@
-# Ascend Triton Example
+# Triton Ascend Example
 
 ## News
 
