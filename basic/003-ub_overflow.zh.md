@@ -30,7 +30,7 @@ GPU版本可以直接搬入，NPU版本受限于UB大小，在长序列的场景
 Code diff of NPU and CUDA
 ```diff
 @triton.jit
-def npu_alloc_extend_kernel(
+def alloc_extend_kernel(
         pre_lens_ptr,
         seq_lens_ptr,
         free_page_ptr,
@@ -70,6 +70,7 @@ def npu_alloc_extend_kernel(
             - (pre_len + page_size - 1) // page_size * page_size
     )
 
+-   # gpu load data at once
 -   offset_many_page = tl.arange(0, max_num_extend_tokens) # UB usage: max_num_extend_tokens(ex. 8192) * size0f(int64)
 -   page_start = tl.load(
 -       free_page_ptr + new_page_start_loc + offset_many_page // page_size,  # UB usage: max_num_extend_tokens(ex. 8192) * size0f(int64)
@@ -82,6 +83,7 @@ def npu_alloc_extend_kernel(
 -   )
     # Totally, the UB usage in this case is (5 * max_num_extend_tokens(ex. 8192) * size0f(int64)) approximately.
 
++   # npu load data using loop
 +   num_loop = tl.cdiv(max_num_extend_tokens, BLOCK_SIZE)
 +   blk_offset = tl.arange(0, BLOCK_SIZE)  # UB usage: BLOCK_SIZE * size0f(int64)
 +   for i in range(num_loop):

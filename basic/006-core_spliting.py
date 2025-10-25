@@ -13,7 +13,6 @@ else:
     device = torch.device('cuda')
 
 
-# -------------------- kernel -------------------- #
 @triton.jit
 def gpu_gather_dim1_kernel(
         x_ptr,  # *x  [B, C]
@@ -39,7 +38,6 @@ def gpu_gather_dim1_kernel(
     tl.store(out_ptr + pid_b * stride_ob + k_off * stride_ok, x_val, mask=mask)
 
 
-# -------------------- 1-D grid kernel -------------------- #
 @triton.jit
 def npu_gather_dim1_kernel(
         x_ptr,  # *x  [B, C]

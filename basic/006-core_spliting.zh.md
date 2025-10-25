@@ -1,4 +1,4 @@
-# 004-discrete-memory-access.py说明
+# 006-core_spliting.py说明
 
 ## 功能
 
@@ -30,7 +30,7 @@ Code diff of NPU and CUDA
 
 ```diff
 @triton.jit
-def gpu_gather_dim1_kernel(
+def gather_dim1_kernel(
         x_ptr,  # *x  [B, C]
         idx_ptr,  # *idx[B, K]
         out_ptr,  # *out[B, K]
@@ -73,5 +73,26 @@ def gpu_gather_dim1_kernel(
 +                  (k_start + ks)[None, :] * stride_ok)
 +       tl.store(out_ptr + out_off, x_val, mask=b_mask[:, None] & k_mask)
 
+# 调用
+B = 128  # batch dim
+K = 64  
+
+BLOCK_B = 4
+BLOCK_K = 128
+
+— # GPU  
+- grid = (triton.cdiv(B, BLOCK_B),)
++ # NPU
++ grid = (B, triton.cdiv(K, BLOCK_K))
+
+gather_dim1_kernel[grid](
+    x, idx, out,
+    x.stride(0), x.stride(1),
+    idx.stride(0), idx.stride(1),
+    out.stride(0), out.stride(1),
+    B, K,
+    BLOCK_B=BLOCK_B,
+    BLOCK_K=BLOCK_K,
+)
 
 ```
