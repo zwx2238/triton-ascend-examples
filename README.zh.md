@@ -50,8 +50,8 @@ NPU上，Triton算子批量处理数据，能够实现性能的最优，在批�
 基于NPU特点，提供一些扩展语义，加速数据处理
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
-| [InsertSlice](https://github.com/Ascend/triton-ascend-examples/blob/main/op_extension/001-insert_slice.zh.md) | 多个数据合并处理，提升数据处理效率 |
+| [InsertSlice](https://github.com/Ascend/triton-ascend-examples/blob/main/op_extension/001-insert_slice.zh.md) | 多个数据合并到一起，批量处理，提升数据处理效率 |
 | [ExtractSlice](https://github.com/Ascend/triton-ascend-examples/blob/main/op_extension/002-extract_slice.zh.md) | 一次批量读取，截取部分数据处理，提升数据处理效率 |
-| [LoadPadding](https://github.com/Ascend/triton-ascend-examples/blob/main/op_extension/003-load_care_padding.md) | 带Mask的数据加载，被Mask抹掉部分如果不需要默认值，则不填写Other，提升MTE2与Vector的并行 |
+| [LoadPadding](https://github.com/Ascend/triton-ascend-examples/blob/main/op_extension/003-load_care_padding.md) | 带Mask的数据加载，被Mask掉部分如果不需要默认值，显示指定，提升MTE2与Vector的并行 |
 
 
