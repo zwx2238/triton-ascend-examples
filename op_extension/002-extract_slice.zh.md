@@ -3,10 +3,27 @@
 ## 功能
 大模型训练/推理中MOE Token反重排场景下，新增extract_slice接口，实现数据批量读取到UB，从UB中截取部分处理，加速npu计算流程  
 
+## 接口说明
+```html
+"""
+    Extract a tensor from another tensor as specified by the operation’s offsets, sizes and strides arguments.
+
+    :param ful: The tensor to split.
+    :type ful: Tensor
+    :param offsets:
+    :type offsets: tuple of ints
+    :param sizes:
+    :type sizes: tuple of ints
+    :param strides:
+    :type strides: tuple of ints
+"""
+def extract_slice(ful, offsets, sizes, strides, _builder=None, _generator=None) -> tensor:
+```
+
 ## 差异点概述
-1. Moe Token反重排，读取一个连续的数据块，根据indece，将Token提取出来后放置到指定的位置，该场景下，数据读取连续，写出是分散的
-GPU实现：每个kernel处理一个Token，利用多核优势能够达成很好的性能
-NPU实现：NPU核数少，需要增加单Kernel处理数据量，才能达到性能最佳，针对Moe反重排，读取数据连续，每段写出到不同的位置，提供extract_slice接口，支持从一个大的Tensor中，读取部分数据，然后对该数据操作，达成批量读取，分散操作的目的
+1. Moe Token反重排，读取一个连续的数据块，根据indece，将Token提取出来后放置到指定的位置，该场景下，数据读取连续，写出是分散的   
+GPU实现：每个kernel处理一个Token，利用多核优势能够达成很好的性能   
+NPU实现：NPU核数少，需要增加单Kernel处理数据量，才能达到性能最佳，针对Moe反重排，读取数据连续，每段写出到不同的位置，提供extract_slice接口，支持从一个大的Tensor中，读取部分数据，然后对该数据操作，达成批量读取，分散操作的目的   
 
 
 ## 差异点详解
