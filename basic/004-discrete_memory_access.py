@@ -3,9 +3,9 @@ import torch
 import triton
 import triton.language as tl
 
-# from ..utils import is_npu
+from ..utils import is_npu
 
-_is_npu = True
+_is_npu = is_npu()
 if _is_npu:
     import torch_npu
 
