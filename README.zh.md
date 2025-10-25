@@ -37,14 +37,15 @@ NPU上部分OP矢量运算不支持特定数据类型，计算时会退化为标
 NPU上，Triton算子批量处理数据，能够实现性能的最优，在批量读取数据时，如果数据存放位置不连续，则会导致数据无法批量加载，退化为标量加载
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
-| [discrete-memory-access](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/004-discrete_memory_access.zh.md) | 小数据量的离散访存，全部读取到UB中，使用Gather语义筛选 |
+| [discrete-memory-access01](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/004-discrete_memory_access.zh.md) | 小数据量的离散访存，全部读取到UB中，使用Gather语义筛选 |
+| [discrete-memory-access02](https://github.com/Ascend/triton-ascend-examples/blob/main/transformer/003-decode_grouped_attention.md) | 需要加载的Tensor在高维连续，低维离散时，如何时间向量化加载 |
 
 
 #### 4、提升并行度
 提升指令并行度，有助于大幅提升性能
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
-| [load order](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/005-load_order.zh.md) | 将没有数据依赖的Load提前，MTE2指令并行下发加速 |
+| [load order](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/005-load_order.zh.md) | 将与计算没有依赖的数据加载语句提前，让MTE2指令并行下发加速 |
 
 #### 5、扩展语义
 基于NPU特点，提供一些扩展语义，加速数据处理
