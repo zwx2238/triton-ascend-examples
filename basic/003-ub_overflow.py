@@ -185,8 +185,8 @@ def run(device_name="npu"):
         kwargs = {
             'BLOCK_SIZE': 1024
         }
-    # else:
-    #     alloc_extend_kernel = gpu_alloc_extend_kernel
+    else:
+        alloc_extend_kernel = gpu_alloc_extend_kernel
 
     batch_size = 2
     max_context_len = 2000
@@ -199,8 +199,6 @@ def run(device_name="npu"):
         out_indices,
         max_num_extend_tokens
     ) = _gen_test_date(batch_size, max_context_len, max_free_page)
-
-    print(f"{seq_lens=}", flush=True)
 
     bs = prefix_lens.shape[0]
     alloc_extend_kernel[(bs,)](
