@@ -49,7 +49,7 @@ def gpu_pick_kernel(
         M: tl.constexpr,
         N: tl.constexpr
 ):
-    pid = tl.program_id(0)  # 只 launch 1 个 block
+    pid = tl.program_id(0)
     rn = tl.arange(0, N)  # [0..N)
 
     idx = tl.load(idx_ptr + rn * stride_idx)
@@ -88,8 +88,4 @@ def run(device_name="npu"):
 
 
 if __name__ == "__main__":
-    for _ in range(100):
-        run("npu")
-
-    for _ in range(100):
-        run("cuda")
+    run("npu" if _is_npu else "cuda")
