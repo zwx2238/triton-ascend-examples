@@ -1,6 +1,6 @@
 <div align="center">
 <p align="center">
-  Triton NPU编程案例
+   <h1>Triton NPU编程案例</h1>
 </p>
 </div>
 
@@ -41,7 +41,7 @@ NPU上，Triton算子批量处理数据，能够实现性能的最优，在批�
 | [discrete-memory-access02](https://github.com/Ascend/triton-ascend-examples/blob/main/transformer/003-decode_grouped_attention.md) | 需要加载的Tensor在高维连续，低维离散时，如何时间向量化加载 |
 
 
-#### 4、提升并行度
+#### 4、提升并行
 提升指令并行度，有助于大幅提升性能
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
