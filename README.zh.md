@@ -55,4 +55,12 @@ NPU上，Triton算子批量处理数据，能够实现性能的最优，在批�
 | [ExtractSlice](https://github.com/Ascend/triton-ascend-examples/blob/main/op_extension/002-extract_slice.zh.md) | 一次批量读取，截取部分数据处理，提升数据处理效率 |
 | [LoadPadding](https://github.com/Ascend/triton-ascend-examples/blob/main/op_extension/003-load_care_padding.md) | 带Mask的数据加载，被Mask掉部分如果不需要默认值，显示指定，提升MTE2与Vector的并行 |
 
+#### 6、完整算子优化样列
+基于开源Triton算子，完整优化例子
+|  **样例名称**  |  **样例介绍**  |
+|---|---|
+| [causal_conv1d](https://github.com/Ascend/triton-ascend-examples/blob/main/transformer/004-fused-cat-slice-conv1d.zh.md) | 基于SGLang QWen3-Next模型中causal_conv1d_update算子完整优化样列 |
+
+
+
 
