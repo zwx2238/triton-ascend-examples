@@ -32,9 +32,13 @@ NPU实现：NPU核数少，需要增加单Kernel处理数据量，才能达到�
 
 Code diff of NPU and CUDA
 
-```diff
+<pre><code>
 @triton.jit
-def gpu_token_rearrangement_kernel(x_ptr, indices, output_ptr, n_elements, S: tl.constexpr, D: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def gpu_token_rearrangement_kernel(x_ptr, indices, 
+                                   output_ptr, n_elements, 
+                                   S : tl.constexpr, 
+                                   D : tl.constexpr, 
+                                   BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
 
     # 1.load rearrangement index
@@ -51,10 +55,15 @@ def gpu_token_rearrangement_kernel(x_ptr, indices, output_ptr, n_elements, S: tl
     out_offset = pid * BLOCK_SIZE * D + tl.arange(0, D)
     out_msk = out_offset < n_elements
     tl.store(output_ptr + out_offset, data, mask=out_msk)
+</code></pre>
 
-
+<pre><code>
 @triton.jit
-def npu_token_rearrangement_kernel(x_ptr, indices, output_ptr, n_elements, S : tl.constexpr, D : tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def npu_token_rearrangement_kernel(x_ptr, indices, 
+                                   output_ptr, n_elements, 
+                                   S : tl.constexpr, 
+                                   D : tl.constexpr, 
+                                   BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(axis=0)
     dtype = output_ptr.type.element_ty
     out_start = pid * BLOCK_SIZE * D
@@ -66,32 +75,16 @@ def npu_token_rearrangement_kernel(x_ptr, indices, output_ptr, n_elements, S : t
     idx_offset = pid * BLOCK_SIZE  + tl.arange(0, BLOCK_SIZE)
     idx_mask = idx_offset < S
     idx = tl.load(indices + idx_offset, idx_mask)
-
+<b><i>
     # 3.load data by index & insert into output tensor in loop
     for i in tl.range(0, BLOCK_SIZE):
         data_offset = D * tl.get_element(idx, (i,))+ tl.arange(0, D)[None,:]
         data_mask = data_offset < n_elements
         data = tl.load(x_ptr + data_offset, data_mask)
         output = tl.insert_slice(output, data, [i,D], [1,D], [1,1])
-
+</i></b>
     # 4.batch store to gm
     out_offset = out_start + tl.arange(0, BLOCK_SIZE)[:,None] + tl.arange(0, D)[None, :]
     out_mask = out_offset < n_elements
     tl.store(output_ptr + out_offset, output, out_mask)
-
-
-def run(device = "cuda"):
-    S = 1024
-    D = 32
-    x = torch.rand(S, D, device=device)
-    indices = torch.randperm(S).to(device=device)
-    output = torch.empty_like(x)
-
-    if device == "cuda":
-        print("begin to run cuda!")
-        gpu_token_rearrangement_kernel[(S,1,1)](x, indices, output, x.numel(), S, D , BLOCK_SIZE=1)
-    elif device == "npu":
-        print("begin to run npu!")
-        npu_token_rearrangement_kernel[(48,1,1)](x, indices, output, x.numel(), S, D , BLOCK_SIZE=22)
-
-```
+</code></pre>
