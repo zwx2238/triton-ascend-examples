@@ -24,7 +24,7 @@ GPU是SIMT架构，基于GPU优化的Triton算子，分核较多，迁移到NPU�
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
 | [KernelExample](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/006-core_spliting.zh.md) | 基于NPU的实际物理核数，划分grid以及kernel内做tiling | 
-| [TilingExample](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/003-ub_overflow.zh.md) | kernel内tiling解决在NPU上运行时UB溢出问题 |
+| [TilingExample](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/003-ub_overflow.zh.md) | kernel内tiling解决Triton算子在NPU上运行时UB溢出的问题 |
 
 #### 2、数据类型优化
 NPU上部分OP矢量运算不支持特定数据类型，计算时会退化为标量运算，影响性能，在确定不影响精度的情况下，建议使用支持的数据类型，提升性能
