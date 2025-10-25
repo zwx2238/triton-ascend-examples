@@ -3,6 +3,25 @@
 ## 功能
 大模型训练/推理中MOE Token重排场景下，新增insert_slice接口，实现数据合并写出到GM，提升性能
 
+## 接口描述
+```html
+"""
+    Insert a tensor to another tensor as specified by the operation’s offsets, sizes and strides arguments.
+
+    :param ful: The tensor to receive tensor.
+    :type ful: Tensor
+    :param sub: The tensor to be inserted.
+    :type sub: Tensor
+    :param offsets:
+    :type offsets: tuple of ints
+    :param sizes:
+    :type sizes: tuple of ints
+    :param strides:
+    :type strides: tuple of ints
+"""
+def insert_slice(ful, sub, offsets, sizes, strides, _builder=None, _generator=None) -> tensor
+```
+
 ## 差异点概述
 1. Moe Token重排，从indece指定的位置读取数据，顺序存放，该场景下，数据随机读取，写出的位置是顺序连续的
 GPU实现：每个kernel处理一个Token，利用多核优势能够达成很好的性能
