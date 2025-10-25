@@ -32,7 +32,7 @@ NPU实现：NPU核数少，需要增加单Kernel处理数据量，才能达到�
 
 Code diff of NPU and CUDA
 
-<pre><code>
+```python
 @triton.jit
 def gpu_token_rearrangement_kernel(x_ptr, indices, 
                                    output_ptr, n_elements, 
@@ -55,7 +55,7 @@ def gpu_token_rearrangement_kernel(x_ptr, indices,
     out_offset = pid * BLOCK_SIZE * D + tl.arange(0, D)
     out_msk = out_offset < n_elements
     tl.store(output_ptr + out_offset, data, mask=out_msk)
-</code></pre>
+```
 
 <pre><code>
 @triton.jit
