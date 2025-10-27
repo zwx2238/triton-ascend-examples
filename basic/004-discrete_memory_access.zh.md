@@ -45,6 +45,7 @@ def pick_kernel(
         N: tl.constexpr
 ):
     pid = tl.program_id(0)
++   rm = tl.arange(0, M)
     rn = tl.arange(0, N)
 
     idx = tl.load(idx_ptr + rn * stride_idx)

@@ -1,3 +1,10 @@
+"""
+The purpose of this example is to demonstrate accessing discrete memory on NPU devices.
+
+The GPU version load discrete data with 'tl.load' and 'mask' from global memory.
+The NPU version first load all data into shared memory contiguously, then pick the elements from the shared memory.
+"""
+
 import torch
 
 import triton
