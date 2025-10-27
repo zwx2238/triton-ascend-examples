@@ -83,9 +83,9 @@ BLOCK_B = 4
 BLOCK_K = 128
 
 — # GPU  
-- grid = (triton.cdiv(B, BLOCK_B),)
+- grid = (B, triton.cdiv(K, BLOCK_K))
 + # NPU
-+ grid = (B, triton.cdiv(K, BLOCK_K))
++ grid = (triton.cdiv(B, BLOCK_B),)
 
 gather_dim1_kernel[grid](
     x, idx, out,
