@@ -22,8 +22,10 @@ out = torch.gather(x, dim=1, index=idx)
 | out   | (B, K) |
 
 ## 差异点概述
+
 npu 设备的物理核数一般为40或48，当发射的逻辑核数量远大于物理核时，会有严重的启动及调度开销
 建议在编写 npu版本的triton kernel时，尽量使发射的逻辑核数量等于物理核
+
 ## 差异点详解
 
 Code diff of NPU and CUDA

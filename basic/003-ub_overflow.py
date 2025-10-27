@@ -1,30 +1,8 @@
 """
 The purpose of this example is to demonstrate how to avoid ub-overflow on NPU devices.
 
-UB, short for Unified Buffer, denotes the maximum buffer size (typically 192 KB) that a vector core can use during computation.
-
-To avoid a UB-overflow exception, you must account for every byte of UB that the Triton kernel may touch simultaneously.
-Focus on the following UB consumers:
-1. tl.load() / tl.store()
-- Each vectorized load/store brings BLOCK_SIZE elements into UB.
-- Multiply by element size (e.g. 4 B for float32, 2 B for float16).
-- If you do multiple loads at once (e.g. A, B, C tensors), sum them all.
-2. Intermediate compute buffers
-- Any tl.zeros, tl.empty, or tl.full you create lives in UB.
-- Any temporary array used for reduction, softmax numerator/denominator, etc. counts.
-- Triton does not spill to DRAM; everything stays in UB until you store it back.
-3. Masks & indices
-- Boolean masks, arange indices, or fancy indexing temporals are also allocated in UB.
-4. Pipeline double-buffering
-- If you use num_stages > 1, Triton keeps multiple buffers in flight; multiply by num_stages.
-
-UB_used ≈ max_over_program(
-            sum_all_loads(BLOCK_SIZE * elem_size)
-          + sum_all_tmps(BLOCK_SIZE * elem_size)
-          + num_stages * (same sums again)
-        )
-
 This example is a simplified version to allocate physical memory slots (pages) in a paged KV-cache for Sglang.
+
 The difference between the gpu and npu version is to load large data from global memory.
 The NPU version uses a loop-based approach to conform to hardware constraints, while the GPU version uses full vectorized parallelism for maximum performance.
 """
@@ -140,20 +118,18 @@ def npu_alloc_extend_kernel(
     )
 
     num_loop = tl.cdiv(max_num_extend_tokens, BLOCK_SIZE)
-    blk_offset = tl.arange(0, BLOCK_SIZE)  # UB usage: BLOCK_SIZE * size0f(int64)
+    blk_offset = tl.arange(0, BLOCK_SIZE)
     for i in range(num_loop):
-        offset_many_page = blk_offset + i * BLOCK_SIZE  # UB usage: BLOCK_SIZE * size0f(int64)
+        offset_many_page = blk_offset + i * BLOCK_SIZE
         page_start = tl.load(
-            free_page_ptr + new_page_start_loc + offset_many_page // page_size,  # UB usage: BLOCK_SIZE * size0f(int64)
-            mask=offset_many_page < num_part2,  # UB usage: BLOCK_SIZE * size0f(int64)
-        )
-        tl.store(
-            out_indices + output_start_loc + offset_many_page,  # UB usage: BLOCK_SIZE * size0f(int64)
-            page_start * page_size + offset_many_page % page_size,  # UB usage: BLOCK_SIZE * size0f(int64)
+            free_page_ptr + new_page_start_loc + offset_many_page // page_size,
             mask=offset_many_page < num_part2,
         )
-    # Totally, the UB usage in this case is (6 * BLOCK_SIZE * size0f(int64)) approximately.
-    # In addition, if multibuffering is enabled, the total usage will be roughly double that when it is disabled.
+        tl.store(
+            out_indices + output_start_loc + offset_many_page,
+            page_start * page_size + offset_many_page % page_size,
+            mask=offset_many_page < num_part2,
+        )
 
 
 def _gen_test_date(batch_size: int,

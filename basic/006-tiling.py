@@ -1,3 +1,11 @@
+"""
+The purpose of this example is to demonstrate making highly use of NPU resources by tiling.
+
+The difference between GPU and NPU is launched kernel number.
+On the NPU, we are trying to match the logical kernel number and physical core number to maximum the utilization
+and avoid overheads like scheduling between cores.
+"""
+
 import triton
 import triton.language as tl
 import torch
