@@ -5,50 +5,50 @@
 </div>
 
 ## 简介
-GPU和NPU存在体系结构的一些差异，Ascend Triton样例仓提供了一些代码样例给开发者进行参考学习，帮助开发者快速掌握基于NPU Triton算子的一些优化实践，以及基于GPU优化的Triton算子如何快速迁移到NPU实现优化性能。
+GPU和NPU存在体系结构的一些差异，基于GPU开发的Triton算子无法在NPU上直接得到最佳性能，Ascend Triton样例仓提供了一些代码样例供开发者学习参考，旨在帮助开发者快速掌握在昇腾上编写Triton算子的一些优化写法，以及基于GPU优化的Triton算子如何快速迁移到NPU实现更好的性能。
 
 ## 试用范围
-本案例仓的一些参考案例，适用范围在A2/A3等昇腾硬件。
+本案例仓的一些参考案例，适用于A2/A3等昇腾硬件。
 
 ## 案例仓结构
 
 ```
--basic：基础优化的
--op_extension: Ascend扩展的一些Op语义，提升性能
+-basic：基础优化的案例，一些common case。
+-op_extension: Ascend针对Triton扩展的一些Op语义，旨在利用昇腾硬件，实现最优性能
 -transformer：常用网络模型的一些优化案例
 ```
 
 ## 算子案例
 #### 1、分核调整
-GPU是SIMT架构，基于GPU优化的Triton算子，分核较多，迁移到NPU或者基于NPU原生开发的Triton算子，需要减少分核数，单核内处理更多的数据量，单核内数据做Tiling，并启用double buffer，才能实现性能最优。
+基于GPU开发及优化的Triton算子，数据分片小，Kernel调用次数多，在迁移到NPU上运行或者开发者基于NPU原生开发Triton算子时，需要减少kernel调用次数，增加单kernel内处理的数据量，并在Kernel内做Tiling，结合double buffer提升流水并行，实现性能最优。
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
-| [KernelExample](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/006-core_spliting.zh.md) | 基于NPU的实际物理核数，划分grid以及kernel内做tiling | 
-| [TilingExample](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/003-ub_overflow.zh.md) | kernel内tiling解决Triton算子在NPU上运行时UB溢出的问题 |
+| [TilingExample01](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/006-tiling.zh.md) | 基于昇腾硬件的实际物理核数，划分grid，并在kernel内做tiling，达成优化性能 | 
+| [TilingExample02](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/003-ub_overflow.zh.md) | 直接迁移基于GPU实现的Triton算子时，可能存在UB溢出问题，通过tiling解决UB内存消耗 |
 
 #### 2、数据类型优化
-NPU上部分OP矢量运算不支持特定数据类型，计算时会退化为标量运算，影响性能，在确定不影响精度的情况下，建议使用支持的数据类型，提升性能
+A2/A3硬件矢量运算单元不支持部分特定数据类型，计算时会退化为标量运算，影响性能，在确定不影响精度的情况下，建议使用支持的数据类型，提升性能
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
-| [vector cmp](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/002-vector_cmp.zh.md) | Cmp Op不支持int32数据类型矢量运算，确定不影响精度的情况下，转换为FP32 |
-| [vector add](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/001-vector_add.zh.md) | 矢量运算不支持int64数据类型，确定不溢出的情况下，转换为int32 | 
+| [vector cmp](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/002-vector_cmp.zh.md) | Cmp Op不支持int32/int64数据类型矢量运算，不影响精度的情况下，转换为FP32，实现最优性能 |
+| [vector add](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/001-vector_add.zh.md) | 矢量运算单元不支持int64数据类型，不影响精度的情况下，使用int32，提升性能 | 
 
 #### 3、离散访存
-NPU上，Triton算子批量处理数据，能够实现性能的最优，在批量读取数据时，如果数据存放位置不连续，则会导致数据无法批量加载，退化为标量加载
+昇腾硬件上，Triton算子在批量读取数据时，如果数据存放位置不连续，会导致数据无法批量加载，退化为标量加载，大幅降低性能，下面总结了一些针对离散访存的列子，
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
-| [discrete-memory-access01](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/004-discrete_memory_access.zh.md) | 小数据量的离散访存，全部读取到UB中，使用Gather语义筛选 |
-| [discrete-memory-access02](https://github.com/Ascend/triton-ascend-examples/blob/main/transformer/003-decode_grouped_attention.md) | 需要加载的Tensor在高维连续，低维离散时，如何时间向量化加载 |
+| [discrete-memory-access01](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/004-discrete_memory_access.zh.md) | 小数据量的离散访存，全部读取到UB后使用Gather语义筛选，替代从GM直接单个读取 |
+| [discrete-memory-access02](https://github.com/Ascend/triton-ascend-examples/blob/main/transformer/003-decode_grouped_attention.md) | 需要加载的Tensor在高维连续，低维离散时，转职实现向量化加载 |
 
 
 #### 4、提升并行
 提升指令并行度，有助于大幅提升性能
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
-| [load order](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/005-load_order.zh.md) | 将与计算没有依赖的数据加载语句提前，让MTE2指令并行下发加速 |
+| [load order](https://github.com/Ascend/triton-ascend-examples/blob/main/basic/005-load_order.zh.md) | 将与计算没有依赖的数据加载语句提前，让MTE2指令并行下发，加速处理 |
 
 #### 5、扩展语义
-基于NPU特点，提供一些扩展语义，加速数据处理
+针对体系结构和访存的一些差异，昇腾提供一些Triton扩展语义，加速数据处理
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
 | [InsertSlice](https://github.com/Ascend/triton-ascend-examples/blob/main/op_extension/001-insert_slice.zh.md) | 多个数据合并到一起，批量处理，提升数据处理效率 |
@@ -60,7 +60,3 @@ NPU上，Triton算子批量处理数据，能够实现性能的最优，在批�
 |  **样例名称**  |  **样例介绍**  |
 |---|---|
 | [causal_conv1d](https://github.com/Ascend/triton-ascend-examples/blob/main/transformer/004-fused-cat-slice-conv1d.zh.md) | 基于SGLang QWen3-Next模型中causal_conv1d_update算子完整优化样列 |
-
-
-
-
