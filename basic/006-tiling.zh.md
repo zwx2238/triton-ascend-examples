@@ -1,4 +1,4 @@
-# 006-core_spliting.py说明
+# 006-tiling.py说明
 
 ## 功能
 
@@ -44,6 +44,7 @@ def gather_dim1_kernel(
         BLOCK_K: tl.constexpr,
 ):
     pid_b = tl.program_id(0)  # 1 block per batch row
+-   # GPU实现
 -   pid_k = tl.program_id(1)  # 1 block per K-tile
 
 -   k_off = pid_k * BLOCK_K + tl.arange(0, BLOCK_K)
@@ -55,11 +56,12 @@ def gather_dim1_kernel(
 
 -   tl.store(out_ptr + pid_b * stride_ob + k_off * stride_ok, x_val, mask=mask)
 
++   #NPU实现
 +   b_idx = pid_b * BLOCK_B + tl.arange(0, BLOCK_B)
 +   b_mask = b_idx < B
 
-    # 对 K 维进行循环
-*   for k_start in range(0, K, BLOCK_K):
++   # 对 K 维进行循环
++   for k_start in range(0, K, BLOCK_K):
 +       ks = tl.arange(0, BLOCK_K)
 +       k_mask = ks < K - k_start
 
