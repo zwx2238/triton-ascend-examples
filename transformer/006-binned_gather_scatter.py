@@ -567,6 +567,6 @@ def test_scatter_npu():
                 torch.allclose(numpy_wgrad_out.cpu(), npu_wgrad_out.cpu(), rtol=1e-3, atol=1e-3), "======")
 
 
-if __name__ == "main":
+if __name__ == "__main__":
     test_gather_npu()
     test_scatter_npu()
