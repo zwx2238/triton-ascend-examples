@@ -72,7 +72,7 @@ def gather(x, indices, top_k):
     out = torch.empty((indices.shape[0], x.shape[1]), dtype=x.dtype, device=x.device)
 
     # tiling
-    # TODO: tiling泛化
+    # NOTE: tiling泛化，如果ub overflow，调小max_block_x和sub_block_size
     num_core = get_npu_properties()["num_vectorcore"]
     indices_length = indices.shape[0]
     block_size = (indices_length - 1) // num_core + 1
@@ -85,7 +85,7 @@ def gather(x, indices, top_k):
     block_x = (min(num_columns, max_block_x) + 15) // 16 * 16
     enable_multi_buffer = True
     # sub_block_size个int32的cur_indices, block_x个bf16/fp16的val, sub_block_size * block_x个bf16/fp16的tmp_buf
-    # sub_block_size * 4 + block_x * 2 + sub_block_size * block_x * 2 <= 95KB
+    # sub_block_size * 4 + block_x * 2 + sub_block_size * block_x * 2 <= 80KB (预留16KB)
     sub_block_size = max((80 * 1024 - block_x * 2) // (block_x * 2 + 4), 1)
 
     _gather_kernel[(num_core,)](
@@ -146,6 +146,7 @@ def scatter(x: torch.Tensor, indices: torch.Tensor, weights: torch.Tensor, top_k
     out = torch.zeros((tokens, top_k, x.shape[1]), dtype=x.dtype, device=x.device)
 
     # tiling
+    # NOTE: tiling泛化，如果ub overflow，调小max_block_x和sub_block_size
     num_core = get_npu_properties()["num_vectorcore"]
     indices_length = indices.shape[0]
     block_size = (indices_length - 1) // num_core + 1
@@ -199,12 +200,12 @@ def _scatter_wgrad_kernel(
             idx_mask = idx_offsets < idx_end
             cur_indices = tl.load(indices + idx_offsets, idx_mask, other=0)
             cur_x = tl.load(x + idx_offsets[:, None] * NUM_COLUMNS + col_offsets[None, :],
-                            idx_mask[:, None] & col_mask[None, :])
+                            idx_mask[:, None] & col_mask[None, :], other=0)
             for i in range(0, SUB_BLOCK_SIZE):
                 if i + idx_offset < idx_end:
                     idx = tl.get_element(cur_indices, (i,))
                     data = tl.extract_slice(cur_x, offsets=(i, 0), sizes=(1, BLOCK_X), strides=(1, 1)).to(tl.float32)
-                    grad = tl.load(grads + (idx // TOP_K) * NUM_COLUMNS + col_offsets, col_mask).to(tl.float32)
+                    grad = tl.load(grads + (idx // TOP_K) * NUM_COLUMNS + col_offsets, col_mask, other=0).to(tl.float32)
                     out = tl.sum(data.reshape(BLOCK_X) * grad.reshape(BLOCK_X))
                     tl.store(wgrad+idx, out.to(wgrad.dtype.element_ty))
 
@@ -212,8 +213,8 @@ def _scatter_wgrad_kernel(
             idx = tl.load(indices + idx_offset)
             acc = tl.zeros((BLOCK_X,), dtype=tl.float32)
             for col_offset in range(0, NUM_COLUMNS, BLOCK_X):
-                data = tl.load(x + idx * NUM_COLUMNS + col_offsets, col_mask)
-                grad = tl.load(grads + (idx // TOP_K) * NUM_COLUMNS + col_offsets, col_mask)
+                data = tl.load(x + idx * NUM_COLUMNS + col_offsets, col_mask, other=0)
+                grad = tl.load(grads + (idx // TOP_K) * NUM_COLUMNS + col_offsets, col_mask, other=0)
                 acc += data.to(tl.float32) * grad.to(tl.float32)
             acc = tl.sum(acc)
             tl.store(wgrad + idx, acc.to(wgrad.dtype.element_ty))
@@ -227,7 +228,8 @@ def scatter_wgrad(
     # create output buffer
     tokens = indices.shape[0] // top_k
     out = torch.empty((tokens * top_k,), dtype=x.dtype, device=x.device)
-
+    # tiling
+    # NOTE: tiling泛化，如果ub overflow，调小max_block_x和sub_block_size
     num_core = get_npu_properties()["num_vectorcore"]
     indices_length = indices.shape[0]
     block_size = (indices_length - 1) // num_core + 1
