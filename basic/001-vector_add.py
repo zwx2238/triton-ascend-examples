@@ -29,7 +29,7 @@ import torch_npu
 import triton
 import triton.language as tl
 
-from prof_util import profiler_wrapper
+from prof_util import profiler_wrapper, compare_profiling_results, print_profiling_summary
 
 
 @triton.jit
@@ -49,11 +49,21 @@ def npu_vector_add_kernel(
     tl.store(z + offset, z1, mask=len_mask)
 
 
-def run(dtype_name):
+def run(dtype_name, result_paths):
+    """
+    Run vector add kernel test for a specific data type.
+
+    Args:
+        dtype_name: PyTorch data type (e.g., torch.int32, torch.int64)
+        result_paths: Dictionary to store profiling result paths
+    """
     vector_len = 16384
     BLOCK_SIZE = 512
     BLOCK_DIM = 32
     device_name = "npu"
+
+    # Get dtype name string for labeling
+    dtype_str = str(dtype_name).split('.')[-1]
 
     x = torch.randint(0, 100, (1, vector_len), device=device_name, dtype=dtype_name)
     y = torch.randint(0, 100, (1, vector_len), device=device_name, dtype=dtype_name)
@@ -66,16 +76,32 @@ def run(dtype_name):
     # Verify correctness
     expected = x + y
     torch.testing.assert_close(z, expected)
-    print(f"==== {dtype_name} correctness check passed")
+    print(f"==== {dtype_str} correctness check passed")
 
     # Profile performance
     def kernel_wrapper():
         npu_vector_add_kernel[(BLOCK_DIM,)](x, y, z, vector_len, BLOCK_SIZE)
 
-    print(f"==== Profiling {dtype_name} vector add kernel...")
-    profiler_wrapper(kernel_wrapper, result_path=f"./result_profiling_{dtype_name}")
+    result_path = f"./result_profiling_{dtype_str}"
+    print(f"==== Profiling {dtype_str} vector add kernel...")
+    profiler_wrapper(kernel_wrapper, result_path=result_path)
+
+    # Store result path for later comparison
+    result_paths[dtype_str] = result_path
 
 if __name__ == "__main__":
-    run(torch.int64)
-    run(torch.int32) # prefer using int32 dtype
+    # Dictionary to store profiling result paths
+    profiling_results = {}
+
+    # Run tests for different data types
+    run(torch.int64, profiling_results)
+    run(torch.int32, profiling_results)  # prefer using int32 dtype
+
+    # Compare and report profiling results
+    print("\n" + "=" * 80)
+    print("Comparing profiling results across different data types...")
+    print("=" * 80)
+
+    results = compare_profiling_results(profiling_results)
+    print_profiling_summary(results, title="Vector Add Kernel Performance Comparison")
 

@@ -24,6 +24,11 @@ Profiler Utility
 Provides profiling utilities for Triton kernels on Ascend NPU.
 """
 
+import os
+import csv
+from pathlib import Path
+from typing import Dict, List, Optional
+
 import torch
 import torch_npu
 
@@ -72,3 +77,176 @@ def profiler_wrapper(fn, *args, result_path="./result_profiling", skip_first=10,
 
     print(f"[INFO] Profiling results saved to {result_path}")
     print(f"[INFO] Check the kernel_details.csv file for detailed performance metrics")
+
+
+def parse_profiling_results(result_path: str) -> Optional[Dict]:
+    """
+    Parse profiling results from the kernel_details.csv file.
+    Automatically detects column names from the CSV header.
+
+    Args:
+        result_path: Path to the profiling results directory
+
+    Returns:
+        Dictionary containing parsed profiling metrics, or None if file not found
+    """
+    csv_path = Path(result_path) / "kernel_details.csv"
+
+    if not csv_path.exists():
+        print(f"[WARNING] kernel_details.csv not found in {result_path}")
+        return None
+
+    try:
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+            if not rows:
+                print(f"[WARNING] No data found in {csv_path}")
+                return None
+
+            # Print available columns for debugging (only first time)
+            columns = list(rows[0].keys())
+            print(f"[DEBUG] CSV columns: {columns}")
+
+            # Find duration column - check common variations
+            duration_col = None
+            for col in columns:
+                col_lower = col.lower()
+                if 'duration' in col_lower and 'us' in col_lower:
+                    duration_col = col
+                    break
+                elif col_lower in ['duration', 'dur', 'time', 'elapsed']:
+                    duration_col = col
+                    break
+                elif 'task duration' in col_lower:
+                    duration_col = col
+                    break
+
+            # Find name column
+            name_col = None
+            for col in columns:
+                col_lower = col.lower()
+                if col_lower in ['name', 'kernel name', 'op name', 'operator name']:
+                    name_col = col
+                    break
+
+            if not duration_col:
+                print(f"[ERROR] Could not find duration column. Available columns: {columns}")
+                return None
+
+            print(f"[INFO] Using duration column: '{duration_col}'")
+            if name_col:
+                print(f"[INFO] Using name column: '{name_col}'")
+
+            # Aggregate metrics across all kernel invocations
+            total_duration = 0.0
+            call_count = 0
+            kernel_names = set()
+
+            for row in rows:
+                try:
+                    # Parse duration
+                    if duration_col and row[duration_col]:
+                        duration = float(row[duration_col])
+                        total_duration += duration
+                        call_count += 1
+
+                    # Collect kernel names
+                    if name_col and row[name_col]:
+                        kernel_names.add(row[name_col])
+                except (ValueError, KeyError) as e:
+                    continue  # Skip rows with invalid data
+
+            if call_count == 0:
+                print(f"[WARNING] No valid duration data found in {csv_path}")
+                return None
+
+            avg_duration = total_duration / call_count
+
+            return {
+                'result_path': result_path,
+                'total_duration_us': total_duration,
+                'avg_duration_us': avg_duration,
+                'call_count': call_count,
+                'kernel_names': list(kernel_names) if kernel_names else ['N/A'],
+                'avg_duration_ms': avg_duration / 1000.0,
+                'duration_column': duration_col
+            }
+
+    except Exception as e:
+        print(f"[ERROR] Failed to parse {csv_path}: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def compare_profiling_results(result_paths: Dict[str, str]) -> Dict[str, Dict]:
+    """
+    Compare profiling results from multiple runs.
+
+    Args:
+        result_paths: Dictionary mapping names to result paths
+                     e.g., {'int32': './result_profiling_int32', 'int64': './result_profiling_int64'}
+
+    Returns:
+        Dictionary mapping names to their parsed metrics
+    """
+    results = {}
+
+    for name, path in result_paths.items():
+        metrics = parse_profiling_results(path)
+        if metrics:
+            results[name] = metrics
+
+    return results
+
+
+def print_profiling_summary(results: Dict[str, Dict], title: str = "Profiling Summary"):
+    """
+    Print a formatted summary of profiling results.
+
+    Args:
+        results: Dictionary of parsed profiling results from compare_profiling_results
+        title: Title for the summary report
+    """
+    if not results:
+        print("[WARNING] No profiling results to display")
+        return
+
+    print("\n" + "=" * 80)
+    print(f"{title:^80}")
+    print("=" * 80)
+
+    # Print header
+    print(f"\n{'Data Type':<15} {'Avg Time (ms)':<20} {'Avg Time (us)':<20} {'Calls':<10}")
+    print("-" * 80)
+
+    # Sort by average duration for easier comparison
+    sorted_results = sorted(results.items(), key=lambda x: x[1]['avg_duration_us'])
+
+    # Print each result
+    for name, metrics in sorted_results:
+        avg_ms = metrics['avg_duration_ms']
+        avg_us = metrics['avg_duration_us']
+        calls = metrics['call_count']
+        print(f"{name:<15} {avg_ms:<20.6f} {avg_us:<20.6f} {calls:<10}")
+
+    # Print speedup comparison (relative to slowest)
+    print("\n" + "-" * 80)
+    print("Speedup Comparison (relative to slowest):")
+    print("-" * 80)
+
+    if len(sorted_results) > 1:
+        slowest_name, slowest_metrics = sorted_results[-1]
+        slowest_time = slowest_metrics['avg_duration_us']
+
+        print(f"{'Data Type':<15} {'Speedup':<20} {'vs Baseline':<30}")
+        print("-" * 80)
+
+        for name, metrics in sorted_results:
+            speedup = slowest_time / metrics['avg_duration_us']
+            baseline_info = f"({slowest_name})" if name != slowest_name else "(baseline)"
+            print(f"{name:<15} {speedup:<20.2f}x {baseline_info:<30}")
+
+    print("=" * 80 + "\n")
