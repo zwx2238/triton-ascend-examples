@@ -21,13 +21,13 @@
 """
 Tiling
 =======
-Demonstrates improving NPU resource utilization through tiling strategy.
+Demonstrates improving NPU resource utilization by matching kernel count to physical cores.
 
 Both kernels run on NPU with different parallelization strategies:
-- GPU-style: Launches many small kernels (B * K/BLOCK_K) - High scheduling overhead
-- NPU-optimized: Launches fewer larger kernels (B/BLOCK_B) with loops - Better utilization
+- GPU-style: Launches too many small kernels - High scheduling overhead, poor performance
+- NPU-optimized: Launches fewer kernels (close to physical core count) - Better utilization
 
-The NPU version matches kernel count to physical cores to maximize utilization.
+The key is to match the number of launched kernels to the NPU's physical cores.
 """
 
 import torch
@@ -40,133 +40,106 @@ from prof_util import profiler_wrapper, compare_profiling_results, print_profili
 
 
 @triton.jit
-def npu_gather_dim1_gpu_style_kernel(
-        x_ptr,  # *x  [B, C]
-        idx_ptr,  # *idx[B, K]
-        out_ptr,  # *out[B, K]
-        stride_xb, stride_xc,
-        stride_ib, stride_ik,
-        stride_ob, stride_ok,
-        B, K,
-        BLOCK_B: tl.constexpr,
-        BLOCK_K: tl.constexpr,
+def npu_vector_add_gpu_style_kernel(
+    x,                          # [Tensor] input tensor
+    y,                          # [Tensor] input tensor
+    z,                          # [Tensor] output tensor
+    vector_len: tl.constexpr,   # len of the vector
+    BLOCK_SIZE: tl.constexpr    # size of each block (small, launches many kernels)
 ):
     """
     GPU-style implementation on NPU: Launches many small kernels.
-    Grid size: (B, K/BLOCK_K) - One kernel per batch and K-block.
-    May have high scheduling overhead on NPU.
+    When BLOCK_SIZE is small, we launch many kernels, causing high scheduling overhead.
     """
-    pid_b = tl.program_id(0)
-    pid_k = tl.program_id(1)
+    pid = tl.program_id(axis=0)
+    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    len_mask = offset < vector_len
 
-    k_off = pid_k * BLOCK_K + tl.arange(0, BLOCK_K)
-    mask = k_off < K
-
-    idx = tl.load(idx_ptr + pid_b * stride_ib + k_off * stride_ik, mask=mask)
-
-    x_val = tl.load(x_ptr + pid_b * stride_xb + idx * stride_xc, mask=mask)
-
-    tl.store(out_ptr + pid_b * stride_ob + k_off * stride_ok, x_val, mask=mask)
+    x1 = tl.load(x + offset, mask=len_mask, other=0)
+    y1 = tl.load(y + offset, mask=len_mask, other=0)
+    z1 = x1 + y1
+    tl.store(z + offset, z1, mask=len_mask)
 
 
 @triton.jit
-def npu_gather_dim1_optimized_kernel(
-        x_ptr,  # *x  [B, C]
-        idx_ptr,  # *idx[B, K]
-        out_ptr,  # *out[B, K]
-        stride_xb, stride_xc,
-        stride_ib, stride_ik,
-        stride_ob, stride_ok,
-        B, K,
-        BLOCK_B: tl.constexpr,
-        BLOCK_K: tl.constexpr,
+def npu_vector_add_optimized_kernel(
+    x,                          # [Tensor] input tensor
+    y,                          # [Tensor] input tensor
+    z,                          # [Tensor] output tensor
+    vector_len: tl.constexpr,   # len of the vector
+    BLOCK_SIZE: tl.constexpr,   # total size to process per kernel
+    CHUNK_SIZE: tl.constexpr    # size of each chunk in the loop
 ):
     """
-    NPU-optimized implementation: Launches fewer kernels with tiling.
-    Grid size: (B/BLOCK_B,) - One kernel per B-block, loops over K dimension.
-    Better matches NPU physical cores for improved utilization.
+    NPU-optimized implementation: Launches fewer kernels with loops.
+    By using larger BLOCK_SIZE and loops, we launch fewer kernels that match physical cores.
     """
-    pid_b = tl.program_id(0)
+    pid = tl.program_id(axis=0)
+    base_offset = pid * BLOCK_SIZE
 
-    b_idx = pid_b * BLOCK_B + tl.arange(0, BLOCK_B)
-    b_mask = b_idx < B
+    # Calculate number of loops needed
+    num_chunks = tl.cdiv(BLOCK_SIZE, CHUNK_SIZE)
 
-    # Loop over K dimension (tiling)
-    for k_start in range(0, K, BLOCK_K):
-        ks = tl.arange(0, BLOCK_K)
-        k_mask = ks < K - k_start
+    # Process data in chunks using loop
+    for i in range(num_chunks):
+        chunk_offset = base_offset + i * CHUNK_SIZE + tl.arange(0, CHUNK_SIZE)
+        len_mask = chunk_offset < vector_len
 
-        idx_off = (b_idx[:, None] * stride_ib +
-                   (k_start + ks)[None, :] * stride_ik)
-        col_idx = tl.load(idx_ptr + idx_off, mask=b_mask[:, None] & k_mask)
-
-        x_off = (b_idx[:, None] * stride_xb +
-                 col_idx * stride_xc)
-        x_val = tl.load(x_ptr + x_off, mask=b_mask[:, None] & k_mask)
-
-        out_off = (b_idx[:, None] * stride_ob +
-                   (k_start + ks)[None, :] * stride_ok)
-        tl.store(out_ptr + out_off, x_val, mask=b_mask[:, None] & k_mask)
+        x1 = tl.load(x + chunk_offset, mask=len_mask, other=0)
+        y1 = tl.load(y + chunk_offset, mask=len_mask, other=0)
+        z1 = x1 + y1
+        tl.store(z + chunk_offset, z1, mask=len_mask)
 
 
 def run(kernel_name="optimized", result_paths=None):
     """
-    Run tiling test.
+    Run tiling test on NPU.
 
     Args:
         kernel_name: Kernel implementation to use ("gpu_style" or "optimized")
         result_paths: Dictionary to store profiling result paths
     """
     device = "npu"
-    B = 128  # batch dim
-    C = 1024  # column dim
-    K = 64  # index dim
+    vector_len = 65536  # Total vector length
 
-    BLOCK_B = 4
-    BLOCK_K = 128
-
-    x = torch.randn(B, C, dtype=torch.float32, device=device)
-    idx = torch.randint(0, C, (B, K), dtype=torch.int64, device=device)
-    out = torch.empty(B, K, dtype=x.dtype, device=device)
-
-    # Select kernel implementation
+    # Select kernel implementation and grid configuration
     if kernel_name == "gpu_style":
-        gather_dim1_kernel = npu_gather_dim1_gpu_style_kernel
-        grid = (B, triton.cdiv(K, BLOCK_K))
-        kernel_label = f"GPU-style kernel (grid={B}x{triton.cdiv(K, BLOCK_K)}={B*triton.cdiv(K, BLOCK_K)} kernels)"
+        # GPU-style: Small blocks, many kernels (e.g., 128 kernels)
+        BLOCK_SIZE = 512
+        CHUNK_SIZE = 512  # Not used in GPU-style
+        BLOCK_DIM = vector_len // BLOCK_SIZE  # 128 kernels
+        kernel = npu_vector_add_gpu_style_kernel
+        kernel_label = f"GPU-style kernel (launches {BLOCK_DIM} kernels)"
     else:
-        gather_dim1_kernel = npu_gather_dim1_optimized_kernel
-        grid = (triton.cdiv(B, BLOCK_B),)
-        kernel_label = f"NPU-optimized kernel (grid={triton.cdiv(B, BLOCK_B)} kernels with tiling)"
+        # NPU-optimized: Larger blocks with loops, fewer kernels (e.g., 16 kernels)
+        BLOCK_SIZE = 4096   # Each kernel processes more data
+        CHUNK_SIZE = 512    # Process in chunks within loop
+        BLOCK_DIM = vector_len // BLOCK_SIZE  # 16 kernels (closer to physical cores)
+        kernel = npu_vector_add_optimized_kernel
+        kernel_label = f"NPU-optimized kernel (launches {BLOCK_DIM} kernels)"
+
+    x = torch.randint(0, 100, (vector_len,), device=device, dtype=torch.int32)
+    y = torch.randint(0, 100, (vector_len,), device=device, dtype=torch.int32)
+    z = torch.zeros((vector_len,), device=device, dtype=torch.int32)
 
     # Warm up and correctness check
-    gather_dim1_kernel[grid](
-        x, idx, out,
-        x.stride(0), x.stride(1),
-        idx.stride(0), idx.stride(1),
-        out.stride(0), out.stride(1),
-        B, K,
-        BLOCK_B=BLOCK_B,
-        BLOCK_K=BLOCK_K,
-    )
+    if kernel_name == "gpu_style":
+        kernel[(BLOCK_DIM,)](x, y, z, vector_len, BLOCK_SIZE)
+    else:
+        kernel[(BLOCK_DIM,)](x, y, z, vector_len, BLOCK_SIZE, CHUNK_SIZE)
     torch.npu.synchronize()
 
     # Verify correctness
-    expected = torch.gather(x, 1, idx)
-    torch.testing.assert_close(out, expected)
+    expected = x + y
+    torch.testing.assert_close(z, expected)
     print(f"==== {kernel_label} - correctness check passed")
 
     # Profile performance
     def kernel_wrapper():
-        gather_dim1_kernel[grid](
-            x, idx, out,
-            x.stride(0), x.stride(1),
-            idx.stride(0), idx.stride(1),
-            out.stride(0), out.stride(1),
-            B, K,
-            BLOCK_B=BLOCK_B,
-            BLOCK_K=BLOCK_K,
-        )
+        if kernel_name == "gpu_style":
+            kernel[(BLOCK_DIM,)](x, y, z, vector_len, BLOCK_SIZE)
+        else:
+            kernel[(BLOCK_DIM,)](x, y, z, vector_len, BLOCK_SIZE, CHUNK_SIZE)
 
     result_path = f"./result_profiling_tiling_{kernel_name}"
     print(f"==== Profiling {kernel_label}...")
@@ -189,20 +162,20 @@ if __name__ == "__main__":
 
     profiling_results = {}
 
-    # Run GPU-style kernel (many small kernels)
+    # Run GPU-style kernel (too many kernels, poor performance)
     run(kernel_name="gpu_style", result_paths=profiling_results)
 
     print("\n")
 
-    # Run NPU-optimized kernel (fewer kernels with tiling)
+    # Run NPU-optimized kernel (fewer kernels matching physical cores, better performance)
     run(kernel_name="optimized", result_paths=profiling_results)
 
     # Compare results
     print("\n" + "=" * 80)
     print("Performance Comparison: GPU-style vs NPU-optimized")
     print("=" * 80)
-    print("Note: GPU-style launches many small kernels (high scheduling overhead)")
-    print("      NPU-optimized launches fewer kernels with loops (better utilization)")
+    print("Note: GPU-style launches too many small kernels (high scheduling overhead)")
+    print("      NPU-optimized launches fewer kernels matching physical cores (better)")
 
     results = compare_profiling_results(profiling_results)
     print_profiling_summary(results, title="Tiling Performance Comparison")
