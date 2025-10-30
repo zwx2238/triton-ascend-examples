@@ -55,11 +55,14 @@ def npu_pick_gpu_style_kernel(
     pid = tl.program_id(0)
     rn = tl.arange(0, N)  # [0..N)
 
+    # Load indices
     idx = tl.load(idx_ptr + rn * stride_idx)
     mask = idx < M
 
     # Direct discrete memory access (may be slow on NPU)
-    val = tl.load(x_ptr + idx * stride_x, mask=mask)
+    # Cast idx to int32 to avoid type issues
+    idx_int = idx.to(tl.int32)
+    val = tl.load(x_ptr + idx_int * stride_x, mask=mask, other=0.0)
 
     tl.store(y_ptr + rn * stride_y, val, mask=mask)
 
@@ -84,14 +87,18 @@ def npu_pick_optimized_kernel(
     rm = tl.arange(0, M)  # [M]
     rn = tl.arange(0, N)  # [N]
 
+    # Load indices
     idx = tl.load(idx_ptr + rn * stride_idx)  # [N]
     mask = idx < M
 
     # Load contiguous data into shared memory
     x_shared = tl.load(x_ptr + rm * stride_x)  # [M]
 
+    # Cast idx to int32 for indexing
+    idx_int = idx.to(tl.int32)
+
     # Gather from shared memory (efficient on NPU)
-    val = tl.gather(x_shared, idx, 0)
+    val = tl.gather(x_shared, idx_int, 0)
 
     tl.store(y_ptr + rn * stride_y, val, mask=mask)
 
@@ -117,7 +124,7 @@ def run(kernel_name="optimized", result_paths=None):
         kernel_label = "NPU-optimized kernel (load then gather)"
 
     x = torch.randn(M, device=device)
-    indices = torch.randint(0, M, (N,), device=device)
+    indices = torch.randint(0, M, (N,), device=device, dtype=torch.int32)
     y = torch.empty(N, dtype=x.dtype, device=device)
 
     # Warm up and correctness check
