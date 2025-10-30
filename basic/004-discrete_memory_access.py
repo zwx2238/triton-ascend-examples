@@ -63,7 +63,7 @@ def npu_pick_gpu_style_kernel(
 
     # Store with explicit pointer calculation (y is contiguous, stride_y=1)
     store_ptrs = y_ptr + rn
-    tl.store(store_ptrs, val, mask=mask)
+    tl.store(store_ptrs, val)
 
 
 @triton.jit
@@ -97,7 +97,7 @@ def npu_pick_optimized_kernel(
 
     # Store with explicit pointer calculation (y is contiguous, stride_y=1)
     store_ptrs = y_ptr + rn
-    tl.store(store_ptrs, val, mask=mask)
+    tl.store(store_ptrs, val)
 
 
 def run(kernel_name="optimized", result_paths=None):
