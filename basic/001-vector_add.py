@@ -23,11 +23,13 @@ Vector Add
 =============
 """
 import os
-import time
 
 import torch
+import torch_npu
 import triton
 import triton.language as tl
+
+from prof_util import profiler_wrapper
 
 
 @triton.jit
@@ -56,18 +58,22 @@ def run(dtype_name):
     x = torch.randint(0, 100, (1, vector_len), device=device_name, dtype=dtype_name)
     y = torch.randint(0, 100, (1, vector_len), device=device_name, dtype=dtype_name)
     z = torch.zeros((1, vector_len), device=device_name, dtype=dtype_name)
+
+    # Test correctness first
     npu_vector_add_kernel[(BLOCK_DIM,)](x, y, z, vector_len, BLOCK_SIZE)
     torch.npu.synchronize()
 
-    spend_time = 0
-    iter_times = 100
-    for i in range(iter_times):
-        start_time = time.time()
-        npu_vector_add_kernel[(BLOCK_DIM,)](x, y, z, vector_len, BLOCK_SIZE)
-        torch.npu.synchronize()
-        spend_time += (time.time() - start_time)
+    # Verify correctness
+    expected = x + y
+    torch.testing.assert_close(z, expected)
+    print(f"==== {dtype_name} correctness check passed")
 
-    print(f"==== {dtype_name} spend_time: {spend_time / iter_times * 1000} ms")
+    # Profile performance
+    def kernel_wrapper():
+        npu_vector_add_kernel[(BLOCK_DIM,)](x, y, z, vector_len, BLOCK_SIZE)
+
+    print(f"==== Profiling {dtype_name} vector add kernel...")
+    profiler_wrapper(kernel_wrapper, result_path=f"./result_profiling_{dtype_name}")
 
 if __name__ == "__main__":
     run(torch.int64)
