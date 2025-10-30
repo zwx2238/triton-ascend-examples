@@ -24,12 +24,13 @@ Vector Cmp
 2. Ascend do not support Cmp on i32/i64, which leads to vector compute fall back into scalar
 """
 import os
-import time
 
 import torch
 import torch_npu
 import triton
 import triton.language as tl
+
+from prof_util import profiler_wrapper
 
 
 
@@ -155,35 +156,33 @@ def run(device = "cuda"):
         vector_cmp_kernel = gpu_vector_cmp_kernel
         sync_device = torch.cuda
         device_dtype = torch.float32
-    
+
     X = torch.rand(batch_size, feature_dim, device=device, dtype=device_dtype)
     Out = torch.empty_like(X)
     Mean = torch.empty(batch_size, device=device, dtype=device_dtype)
     Rstd = torch.empty(batch_size, device=device, dtype=device_dtype)
-    
+
     BLK_M = 1
     BLK_N = triton.next_power_of_2(feature_dim)
     num_warps = min(max(BLK_N // 256, 1), 8)
-    # warm up 
+
+    # Warm up and correctness check
     vector_cmp_kernel[(batch_size // BLK_M, 1)](
         X, Out, Mean, Rstd, X.stride(0), Out.stride(0), batch_size, feature_dim, eps, BLK_M, BLK_N, num_warps=num_warps)
     sync_device.synchronize()
 
-    spend_time = 0
-    iter_times = 100
-    sync_device.synchronize()
-    start_time = time.time()
-    for _ in range(iter_times):
-        vector_cmp_kernel[(batch_size // BLK_M, 1)](
-            X, Out, Mean, Rstd, X.stride(0), Out.stride(0), batch_size, feature_dim, eps, BLK_M, BLK_N, num_warps=num_warps)
-    sync_device.synchronize()
-    spend_time += (time.time() - start_time)
-
-    print(f"==== {device} spend_time: {spend_time / iter_times * 1000} ms")
-
     Out_ref = run_ref(X)
     torch.testing.assert_close(Out, Out_ref, rtol=1e-3, atol=1e-2)
-    print(f"==== {device} acc check passed!")
+    print(f"==== {device} correctness check passed")
+
+    # Profile performance
+    def kernel_wrapper():
+        vector_cmp_kernel[(batch_size // BLK_M, 1)](
+            X, Out, Mean, Rstd, X.stride(0), Out.stride(0), batch_size, feature_dim, eps, BLK_M, BLK_N, num_warps=num_warps)
+
+    result_path = f"./result_profiling_vector_cmp_{device}"
+    print(f"==== Profiling {device} vector cmp kernel...")
+    profiler_wrapper(kernel_wrapper, result_path=result_path)
 
 
 if __name__ == "__main__":

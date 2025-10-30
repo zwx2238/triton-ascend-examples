@@ -208,7 +208,6 @@ def parse_profiling_results(result_path: str) -> Optional[Dict]:
                 'avg_duration_us': avg_duration,
                 'call_count': call_count,
                 'kernel_names': list(kernel_names) if kernel_names else ['N/A'],
-                'avg_duration_ms': avg_duration / 1000.0,
                 'duration_column': duration_col
             }
 
@@ -257,7 +256,7 @@ def print_profiling_summary(results: Dict[str, Dict], title: str = "Profiling Su
     print("=" * 80)
 
     # Print header
-    print(f"\n{'Data Type':<15} {'Avg Time (ms)':<20} {'Avg Time (us)':<20} {'Calls':<10}")
+    print(f"\n{'Data Type':<15} {'Avg Time (us)':<20} {'Calls':<10}")
     print("-" * 80)
 
     # Sort by average duration for easier comparison
@@ -265,10 +264,9 @@ def print_profiling_summary(results: Dict[str, Dict], title: str = "Profiling Su
 
     # Print each result
     for name, metrics in sorted_results:
-        avg_ms = metrics['avg_duration_ms']
         avg_us = metrics['avg_duration_us']
         calls = metrics['call_count']
-        print(f"{name:<15} {avg_ms:<20.6f} {avg_us:<20.6f} {calls:<10}")
+        print(f"{name:<15} {avg_us:<20.6f} {calls:<10}")
 
     # Print speedup comparison (relative to slowest)
     print("\n" + "-" * 80)

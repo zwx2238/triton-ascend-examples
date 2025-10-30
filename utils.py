@@ -4,7 +4,7 @@ import triton.runtime.driver as driver
 
 
 def is_npu() -> bool:
-    return hasattr(torch, "npu") and torch.npu.is_available()
+    return True
 
 
 def is_cuda():
