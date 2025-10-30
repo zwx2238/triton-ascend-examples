@@ -97,7 +97,7 @@ def run():
     """
     device = "npu"
     vector_len = 65536   # Larger vector
-    BLOCK_SIZE = 16384   # Very large block size (will cause UB overflow on NPU)
+    BLOCK_SIZE = 32768   # Very large block size (will cause UB overflow on NPU)
     CHUNK_SIZE = 1024    # Smaller chunk size for NPU (avoids UB overflow)
     BLOCK_DIM = 4        # Number of blocks
 
