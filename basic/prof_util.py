@@ -24,10 +24,9 @@ Profiler Utility
 Provides profiling utilities for Triton kernels on Ascend NPU.
 """
 
-import os
 import csv
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import torch
 import torch_npu
@@ -79,10 +78,45 @@ def profiler_wrapper(fn, *args, result_path="./result_profiling", skip_first=10,
     print(f"[INFO] Check the kernel_details.csv file for detailed performance metrics")
 
 
+def _find_latest_csv(result_path: str) -> Optional[Path]:
+    """
+    Find the latest kernel_details.csv file in the profiling output directory.
+    The path structure is: result_path/xxx_ascend_pt/ASCEND_PROFILER_OUTPUT/kernel_details.csv
+
+    Args:
+        result_path: Base profiling result path
+
+    Returns:
+        Path to the latest kernel_details.csv file, or None if not found
+    """
+    result_dir = Path(result_path)
+
+    if not result_dir.exists():
+        return None
+
+    # Find all *_ascend_pt directories
+    ascend_dirs = list(result_dir.glob("*_ascend_pt"))
+
+    if not ascend_dirs:
+        return None
+
+    # Sort by modification time (newest first)
+    ascend_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    # Find kernel_details.csv in the newest directory
+    for ascend_dir in ascend_dirs:
+        csv_path = ascend_dir / "ASCEND_PROFILER_OUTPUT" / "kernel_details.csv"
+        if csv_path.exists():
+            return csv_path
+
+    return None
+
+
 def parse_profiling_results(result_path: str) -> Optional[Dict]:
     """
     Parse profiling results from the kernel_details.csv file.
     Automatically detects column names from the CSV header.
+    Handles the nested directory structure: result_path/xxx_ascend_pt/ASCEND_PROFILER_OUTPUT/
 
     Args:
         result_path: Path to the profiling results directory
@@ -90,11 +124,15 @@ def parse_profiling_results(result_path: str) -> Optional[Dict]:
     Returns:
         Dictionary containing parsed profiling metrics, or None if file not found
     """
-    csv_path = Path(result_path) / "kernel_details.csv"
+    # Find the actual CSV file in the nested directory structure
+    csv_path = _find_latest_csv(result_path)
 
-    if not csv_path.exists():
+    if not csv_path:
         print(f"[WARNING] kernel_details.csv not found in {result_path}")
+        print(f"[INFO] Expected structure: {result_path}/xxx_ascend_pt/ASCEND_PROFILER_OUTPUT/kernel_details.csv")
         return None
+
+    print(f"[INFO] Found CSV at: {csv_path}")
 
     try:
         with open(csv_path, 'r', encoding='utf-8') as f:

@@ -13,7 +13,7 @@ import torch
 import triton
 import triton.language as tl
 
-from ..utils import is_npu, next_power_of_2
+from utils import is_npu, next_power_of_2
 
 _is_npu = is_npu()
 if _is_npu:
