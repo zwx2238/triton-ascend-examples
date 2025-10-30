@@ -61,8 +61,9 @@ def npu_pick_gpu_style_kernel(
     # Direct discrete memory access (may be slow on NPU)
     val = tl.load(x_ptr + idx * stride_x, mask=mask)
 
-    # Temporarily comment out store to test if load works
-    # tl.store(y_ptr + rn * stride_y, val, mask=mask)
+    # Store with explicit pointer calculation (y is contiguous, stride_y=1)
+    store_ptrs = y_ptr + rn
+    tl.store(store_ptrs, val, mask=mask)
 
 
 @triton.jit
@@ -94,8 +95,9 @@ def npu_pick_optimized_kernel(
     # Gather from shared memory (efficient on NPU)
     val = tl.gather(x_shared, idx, 0)
 
-    # Temporarily comment out store to test if load/gather works
-    # tl.store(y_ptr + rn * stride_y, val, mask=mask)
+    # Store with explicit pointer calculation (y is contiguous, stride_y=1)
+    store_ptrs = y_ptr + rn
+    tl.store(store_ptrs, val, mask=mask)
 
 
 def run(kernel_name="optimized", result_paths=None):
@@ -136,9 +138,10 @@ def run(kernel_name="optimized", result_paths=None):
     )
     torch.npu.synchronize()
 
-    # Skip correctness check since store is commented out
-    # Just testing if load/gather works without errors
-    print(f"==== {kernel_label} - kernel executed (store commented out for testing)")
+    # Verify correctness
+    expected = x[indices]
+    torch.testing.assert_close(y, expected)
+    print(f"==== {kernel_label} - correctness check passed")
 
     # Profile performance
     def kernel_wrapper():
