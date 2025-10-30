@@ -56,14 +56,13 @@ def npu_pick_gpu_style_kernel(
     rn = tl.arange(0, N)  # [0..N)
 
     idx = tl.load(idx_ptr + rn * stride_idx)
-    mask = idx < M
 
     # Direct discrete memory access (may be slow on NPU)
-    val = tl.load(x_ptr + idx * stride_x, mask=mask)
+    val = tl.load(x_ptr + idx * stride_x, mask=idx < M)
 
     # Store with explicit pointer calculation (y is contiguous, stride_y=1)
     store_ptrs = y_ptr + rn
-    tl.store(store_ptrs, val)
+    tl.store(store_ptrs, val, mask=idx < M)
 
 
 @triton.jit
