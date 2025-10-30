@@ -119,7 +119,7 @@ def run():
         print("     WARNING: This may indicate BLOCK_SIZE is still too small for UB overflow")
     except Exception as e:
         print(f"==== GPU-style kernel FAILED (UB overflow detected): {type(e).__name__}")
-        print(f"     {str(e)[:200]}")
+        print(f"     {str(e)}")
 
     print("\n")
 
