@@ -1,195 +1,149 @@
+# Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
 """
-The purpose of this example is to demonstrate how to avoid ub-overflow on NPU devices.
+UB Overflow
+=============
+Demonstrates how to avoid UB (Unified Buffer) overflow on NPU devices.
 
-This example is a simplified version to allocate physical memory slots (pages) in a paged KV-cache for Sglang.
-
-The difference between the gpu and npu version is to load large data from global memory.
-The NPU version uses a loop-based approach to conform to hardware constraints, while the GPU version uses full vectorized parallelism for maximum performance.
+Both kernels run on NPU, but with different implementation approaches:
+- GPU-style: Loads large data in one shot (may cause UB overflow or poor performance on NPU)
+- NPU-optimized: Uses loop-based approach to load data in chunks (avoids UB overflow)
 """
 
-import numpy as np
 import torch
-
+import torch_npu
 import triton
 import triton.language as tl
 
-from utils import is_npu, next_power_of_2
-
-_is_npu = is_npu()
-if _is_npu:
-    import torch_npu
-
-    device = torch.device('npu')
-else:
-    device = torch.device('cuda')
+from utils import is_npu
 
 
 @triton.jit
-def gpu_alloc_extend_kernel(
-        pre_lens_ptr,
-        seq_lens_ptr,
-        free_page_ptr,
-        out_indices,
-        bs_upper: tl.constexpr,
-        page_size: tl.constexpr,
-        max_num_extend_tokens: tl.constexpr,
+def npu_vector_add_gpu_style_kernel(
+    x,                          # [Tensor] input tensor
+    y,                          # [Tensor] input tensor
+    z,                          # [Tensor] output tensor
+    vector_len: tl.constexpr,   # len of the vector
+    BLOCK_SIZE: tl.constexpr    # size of each block (large, may cause UB overflow on NPU)
 ):
-    pid = tl.program_id(0)
+    """
+    GPU-style implementation on NPU: Load large data blocks in one shot.
+    This approach may cause UB overflow on NPU when BLOCK_SIZE is very large.
+    """
+    pid = tl.program_id(axis=0)
+    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    len_mask = offset < vector_len
 
-    load_offset = tl.arange(0, bs_upper)
-    seq_lens = tl.load(seq_lens_ptr + load_offset, mask=load_offset <= pid)
-    pre_lens = tl.load(pre_lens_ptr + load_offset, mask=load_offset <= pid)
-    extend_lens = seq_lens - pre_lens
-
-    seq_len = tl.load(seq_lens_ptr + pid)
-    pre_len = tl.load(pre_lens_ptr + pid)
-    extend_len = seq_len - pre_len
-
-    sum_extend_lens = tl.sum(extend_lens)
-    output_start_loc = sum_extend_lens - extend_len
-
-    num_pages_after = (seq_lens + page_size - 1) // page_size
-    num_pages_before = (pre_lens + page_size - 1) // page_size
-    num_new_pages = num_pages_after - num_pages_before
-
-    num_page_start_loc_self = (seq_len + page_size - 1) // page_size - (
-            pre_len + page_size - 1
-    ) // page_size
-    sum_num_new_pages = tl.sum(num_new_pages)
-    new_page_start_loc = sum_num_new_pages - num_page_start_loc_self
-
-    # Part 2: fill the new full pages
-    num_part2 = (
-            seq_len // page_size * page_size
-            - (pre_len + page_size - 1) // page_size * page_size
-    )
-
-    offset_many_page = tl.arange(0, max_num_extend_tokens)
-    page_start = tl.load(
-        free_page_ptr + new_page_start_loc + offset_many_page // page_size,
-        mask=offset_many_page < num_part2,
-    )
-    tl.store(
-        out_indices + output_start_loc + offset_many_page,
-        page_start * page_size + offset_many_page % page_size,
-        mask=offset_many_page < num_part2,
-    )
+    # Load large data in one operation (may overflow UB on NPU)
+    x1 = tl.load(x + offset, mask=len_mask, other=0)
+    y1 = tl.load(y + offset, mask=len_mask, other=0)
+    z1 = x1 + y1
+    tl.store(z + offset, z1, mask=len_mask)
 
 
 @triton.jit
-def npu_alloc_extend_kernel(
-        pre_lens_ptr,
-        seq_lens_ptr,
-        free_page_ptr,
-        out_indices,
-        bs_upper: tl.constexpr,
-        page_size: tl.constexpr,
-        max_num_extend_tokens: tl.constexpr,
-        BLOCK_SIZE: tl.constexpr = 1024,
+def npu_vector_add_optimized_kernel(
+    x,                          # [Tensor] input tensor
+    y,                          # [Tensor] input tensor
+    z,                          # [Tensor] output tensor
+    vector_len: tl.constexpr,   # len of the vector
+    BLOCK_SIZE: tl.constexpr,   # total size to process
+    CHUNK_SIZE: tl.constexpr    # size of each chunk (smaller, avoids UB overflow)
 ):
-    pid = tl.program_id(0)
+    """
+    NPU-optimized implementation: Use loop to load data in chunks to avoid UB overflow.
+    This approach conforms to NPU hardware constraints.
+    """
+    pid = tl.program_id(axis=0)
+    base_offset = pid * BLOCK_SIZE
 
-    load_offset = tl.arange(0, bs_upper)
-    seq_lens = tl.load(seq_lens_ptr + load_offset, mask=load_offset <= pid)
-    pre_lens = tl.load(pre_lens_ptr + load_offset, mask=load_offset <= pid)
-    extend_lens = seq_lens - pre_lens
+    # Calculate number of loops needed
+    num_chunks = tl.cdiv(BLOCK_SIZE, CHUNK_SIZE)
 
-    seq_len = tl.load(seq_lens_ptr + pid)
-    pre_len = tl.load(pre_lens_ptr + pid)
-    extend_len = seq_len - pre_len
+    # Process data in chunks using loop
+    for i in range(num_chunks):
+        chunk_offset = base_offset + i * CHUNK_SIZE + tl.arange(0, CHUNK_SIZE)
+        len_mask = chunk_offset < vector_len
 
-    sum_extend_lens = tl.sum(extend_lens)
-    output_start_loc = sum_extend_lens - extend_len
-
-    num_pages_after = (seq_lens + page_size - 1) // page_size
-    num_pages_before = (pre_lens + page_size - 1) // page_size
-    num_new_pages = num_pages_after - num_pages_before
-
-    num_page_start_loc_self = (seq_len + page_size - 1) // page_size - (
-            pre_len + page_size - 1
-    ) // page_size
-    sum_num_new_pages = tl.sum(num_new_pages)
-    new_page_start_loc = sum_num_new_pages - num_page_start_loc_self
-
-    # Part 2: fill the new full pages
-    num_part2 = (
-            seq_len // page_size * page_size
-            - (pre_len + page_size - 1) // page_size * page_size
-    )
-
-    num_loop = tl.cdiv(max_num_extend_tokens, BLOCK_SIZE)
-    blk_offset = tl.arange(0, BLOCK_SIZE)
-    for i in range(num_loop):
-        offset_many_page = blk_offset + i * BLOCK_SIZE
-        page_start = tl.load(
-            free_page_ptr + new_page_start_loc + offset_many_page // page_size,
-            mask=offset_many_page < num_part2,
-        )
-        tl.store(
-            out_indices + output_start_loc + offset_many_page,
-            page_start * page_size + offset_many_page % page_size,
-            mask=offset_many_page < num_part2,
-        )
+        # Load smaller chunks to avoid UB overflow
+        x1 = tl.load(x + chunk_offset, mask=len_mask, other=0)
+        y1 = tl.load(y + chunk_offset, mask=len_mask, other=0)
+        z1 = x1 + y1
+        tl.store(z + chunk_offset, z1, mask=len_mask)
 
 
-def _gen_test_date(batch_size: int,
-                   max_context_len: int,
-                   max_free_page: int):
-    free_pages = torch.arange(max_free_page, dtype=torch.int32, device=device)
+def run():
+    """
+    Run test to demonstrate UB overflow avoidance on NPU.
+    Both kernels run on NPU with different implementation styles.
+    """
+    device = "npu"
+    vector_len = 16384  # Large vector
+    BLOCK_SIZE = 4096   # Large block size (may cause UB overflow)
+    CHUNK_SIZE = 512    # Smaller chunk size for NPU (avoids UB overflow)
+    BLOCK_DIM = 4       # Number of blocks
 
-    prefix_lens = torch.zeros(batch_size, dtype=torch.int32, device=device)  # shape:(batch)
+    x = torch.randint(0, 100, (vector_len,), device=device, dtype=torch.int32)
+    y = torch.randint(0, 100, (vector_len,), device=device, dtype=torch.int32)
 
-    seq_lens = torch.from_numpy(
-        np.random.choice(range(max_context_len), size=batch_size, replace=False)
-    ).to(torch.int32).to(device=device)  # shape:(batch)
+    # Test GPU-style kernel on NPU (may have UB overflow issues)
+    print("Testing GPU-style kernel on NPU (large single load)...")
+    z_gpu_style = torch.zeros((vector_len,), device=device, dtype=torch.int32)
+    try:
+        npu_vector_add_gpu_style_kernel[(BLOCK_DIM,)](x, y, z_gpu_style, vector_len, BLOCK_SIZE)
+        torch.npu.synchronize()
 
-    extend_num_tokens = torch.sum(seq_lens).item()
+        # Verify correctness
+        expected = x + y
+        torch.testing.assert_close(z_gpu_style, expected)
+        print("==== GPU-style kernel: correctness check passed")
+        print("     Note: This kernel may cause UB overflow with larger BLOCK_SIZE")
+    except Exception as e:
+        print(f"==== GPU-style kernel failed (UB overflow): {e}")
 
-    out_indices = torch.empty(
-        (extend_num_tokens,), dtype=torch.int64, device=device
-    )
+    print("\n")
 
-    max_num_extend_tokens = next_power_of_2(extend_num_tokens)
+    # Test NPU-optimized kernel (avoids UB overflow using loop)
+    print("Testing NPU-optimized kernel (chunked load with loop)...")
+    z_npu_opt = torch.zeros((vector_len,), device=device, dtype=torch.int32)
+    npu_vector_add_optimized_kernel[(BLOCK_DIM,)](x, y, z_npu_opt, vector_len, BLOCK_SIZE, CHUNK_SIZE)
+    torch.npu.synchronize()
 
-    return prefix_lens, seq_lens, free_pages, out_indices, max_num_extend_tokens
+    # Verify correctness
+    expected = x + y
+    torch.testing.assert_close(z_npu_opt, expected)
+    print("==== NPU-optimized kernel: correctness check passed")
+    print("     This kernel avoids UB overflow by processing data in chunks")
 
-
-def run(device_name="npu"):
-    kwargs = {}
-    if device_name == "npu":
-        alloc_extend_kernel = npu_alloc_extend_kernel
-        kwargs = {
-            'BLOCK_SIZE': 1024
-        }
-    else:
-        alloc_extend_kernel = gpu_alloc_extend_kernel
-
-    batch_size = 2
-    max_context_len = 2000
-    max_free_page = 2048
-
-    (
-        prefix_lens,
-        seq_lens,
-        free_pages,
-        out_indices,
-        max_num_extend_tokens
-    ) = _gen_test_date(batch_size, max_context_len, max_free_page)
-
-    bs = prefix_lens.shape[0]
-    alloc_extend_kernel[(bs,)](
-        prefix_lens,
-        seq_lens,
-        free_pages,
-        out_indices,
-        next_power_of_2(bs),
-        page_size=128,
-        max_num_extend_tokens=max_num_extend_tokens,
-        **kwargs
-    )
-
-    print(f'{out_indices=}', flush=True)
+    print("\n" + "=" * 80)
+    print("Summary:")
+    print("- GPU-style kernel: Loads large blocks in one shot (BLOCK_SIZE={})".format(BLOCK_SIZE))
+    print("                    May cause UB overflow on NPU with very large blocks")
+    print("- NPU-optimized kernel: Loads data in chunks (CHUNK_SIZE={})".format(CHUNK_SIZE))
+    print("                        Avoids UB overflow by using loop-based approach")
+    print("=" * 80)
 
 
 if __name__ == "__main__":
-    run("npu" if _is_npu else "cuda")
+    if not is_npu():
+        print("This example requires NPU device")
+        exit(1)
+    run()

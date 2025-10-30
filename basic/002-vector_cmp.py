@@ -20,8 +20,9 @@
 
 """
 Vector Cmp
-1. Case study on performance optimization of Triton operators on NPU, compared with GPU.
-2. Ascend do not support Cmp on i32/i64, which leads to vector compute fall back into scalar
+1. Case study on performance optimization of Triton operators on NPU, compared GPU-style vs NPU-optimized.
+2. Ascend does not support Cmp on i32/i64, which leads to vector compute fallback to scalar
+3. Both kernels run on NPU with different implementation styles
 """
 import os
 
@@ -30,7 +31,7 @@ import torch_npu
 import triton
 import triton.language as tl
 
-from prof_util import profiler_wrapper
+from prof_util import profiler_wrapper, compare_profiling_results, print_profiling_summary
 
 
 
@@ -39,7 +40,7 @@ def is_npu() -> bool:
 
 
 @triton.jit
-def gpu_vector_cmp_kernel(
+def npu_vector_cmp_gpu_style_kernel(
     X,                 # [Tensor] input tensor (row x col)
     Out,               # [Tensor] output tensor (row x col)
     Mean,              # [Vector] mean tensor (row, ) of X
@@ -53,10 +54,12 @@ def gpu_vector_cmp_kernel(
     BLOCK_N: tl.constexpr
 ):
     """
-    an example of layernorm to checkout Vector Cmp
+    GPU-style layernorm implementation on NPU.
+    Uses i32/i64 comparison which may fallback to scalar operations on NPU.
+
     Out = ((X - E[X]) / sqrt(V[X] + eps)) on dim -1
-    
-    just for easy case, we assume that:
+
+    Assumptions:
     1. BLOCK_N >= X.shape(-1), group_n = 0 only
     2. BLOCK_M = 1, group_m = range(0, row, 1)
     """
@@ -76,7 +79,7 @@ def gpu_vector_cmp_kernel(
     # calculate mean & rstd
     mean = tl.sum(x, axis=0) / N
     tl.store(Mean + row, mean)
-    xbar = tl.where(cols < N, x - mean, 0.0)
+    xbar = tl.where(cols < N, x - mean, 0.0)  # i64 cmp may fallback to scalar on NPU
     var = tl.sum(xbar * xbar, axis=0) / N
     rstd = 1 / tl.sqrt(var + eps)
     tl.store(Rstd + row, rstd)
@@ -88,7 +91,7 @@ def gpu_vector_cmp_kernel(
 
 
 @triton.jit
-def npu_vector_cmp_kernel(
+def npu_vector_cmp_optimized_kernel(
     X,                 # [Tensor] input tensor (row x col)
     Out,               # [Tensor] output tensor (row x col)
     Mean,              # [Vector] mean tensor (row, ) of X
@@ -102,7 +105,8 @@ def npu_vector_cmp_kernel(
     BLOCK_N: tl.constexpr
 ):
     """
-    NPU example shows how to use vec cmp from upper gpu original triton
+    NPU-optimized layernorm implementation.
+    Converts i64 to float32 before comparison to avoid scalar fallback on NPU.
     """
     group_m = tl.program_id(0)
     group_n = tl.program_id(1)
@@ -120,11 +124,11 @@ def npu_vector_cmp_kernel(
     # calculate mean & rstd
     mean = tl.sum(x, axis=0) / N
     tl.store(Mean + row, mean)
-    # [Changed begin]
-    # xbar = tl.where(cols < N, X - mean, 0.0)
+    # [Optimized for NPU]
+    # Convert i64 to float32 before comparison to avoid scalar fallback
     cols_cmp = cols.to(tl.float32)
     xbar = tl.where(cols_cmp < N, x - mean, 0.0)
-    # [Changed end]
+    # [End optimization]
 
     var = tl.sum(xbar * xbar, axis=0) / N
     rstd = 1 / tl.sqrt(var + eps)
@@ -136,8 +140,15 @@ def npu_vector_cmp_kernel(
     tl.store(Out + cols, out, mask=mask)
 
 
-def run(device = "cuda"):
-    """run random test along with native norm"""
+def run(device="cuda", kernel_name="optimized", result_paths=None):
+    """
+    Run random test along with native norm.
+
+    Args:
+        device: Device to run on ("cuda" or "npu")
+        kernel_name: Kernel implementation to use ("gpu_style" or "optimized")
+        result_paths: Dictionary to store profiling result paths
+    """
     def run_ref(X):
         mean = X.mean(dim=-1, keepdim=True)
         std = X.std(dim=-1, keepdim=True)
@@ -148,12 +159,18 @@ def run(device = "cuda"):
     feature_dim = 128
     eps = 1e-6
 
+    # Select kernel implementation
+    if kernel_name == "gpu_style":
+        vector_cmp_kernel = npu_vector_cmp_gpu_style_kernel
+        kernel_label = "GPU-style kernel (may fallback to scalar on NPU)"
+    else:
+        vector_cmp_kernel = npu_vector_cmp_optimized_kernel
+        kernel_label = "NPU-optimized kernel"
+
     if device == "npu":
-        vector_cmp_kernel = npu_vector_cmp_kernel
         sync_device = torch.npu
         device_dtype = torch.float32
     else:
-        vector_cmp_kernel = gpu_vector_cmp_kernel
         sync_device = torch.cuda
         device_dtype = torch.float32
 
@@ -173,21 +190,48 @@ def run(device = "cuda"):
 
     Out_ref = run_ref(X)
     torch.testing.assert_close(Out, Out_ref, rtol=1e-3, atol=1e-2)
-    print(f"==== {device} correctness check passed")
+    print(f"==== {device} {kernel_label} - correctness check passed")
 
     # Profile performance
     def kernel_wrapper():
         vector_cmp_kernel[(batch_size // BLK_M, 1)](
             X, Out, Mean, Rstd, X.stride(0), Out.stride(0), batch_size, feature_dim, eps, BLK_M, BLK_N, num_warps=num_warps)
 
-    result_path = f"./result_profiling_vector_cmp_{device}"
-    print(f"==== Profiling {device} vector cmp kernel...")
+    result_path = f"./result_profiling_vector_cmp_{device}_{kernel_name}"
+    print(f"==== Profiling {device} {kernel_label}...")
     profiler_wrapper(kernel_wrapper, result_path=result_path)
+
+    # Store result path for comparison
+    if result_paths is not None:
+        result_paths[f"{device}_{kernel_name}"] = result_path
 
 
 if __name__ == "__main__":
     if is_npu():
-        run("npu")
+        # On NPU, compare both GPU-style and NPU-optimized kernel implementations
+        print("=" * 80)
+        print("Running on NPU - Comparing GPU-style vs NPU-optimized kernels")
+        print("=" * 80)
+
+        profiling_results = {}
+
+        # Run GPU-style kernel (may have performance issues due to i32/i64 cmp fallback)
+        run("npu", kernel_name="gpu_style", result_paths=profiling_results)
+
+        print("\n")
+
+        # Run NPU-optimized kernel
+        run("npu", kernel_name="optimized", result_paths=profiling_results)
+
+        # Compare results
+        print("\n" + "=" * 80)
+        print("Performance Comparison: GPU-style vs NPU-optimized")
+        print("=" * 80)
+        print("Note: GPU-style kernel may fallback to scalar operations on NPU due to i32/i64 cmp")
+
+        results = compare_profiling_results(profiling_results)
+        print_profiling_summary(results, title="Vector Cmp Kernel Performance Comparison")
     else:
-        run("cuda")
+        # On CUDA, only run GPU-style kernel
+        run("cuda", kernel_name="gpu_style")
 
