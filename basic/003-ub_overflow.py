@@ -96,16 +96,17 @@ def run():
     Both kernels run on NPU with different implementation styles.
     """
     device = "npu"
-    vector_len = 16384  # Large vector
-    BLOCK_SIZE = 4096   # Large block size (may cause UB overflow)
-    CHUNK_SIZE = 512    # Smaller chunk size for NPU (avoids UB overflow)
-    BLOCK_DIM = 4       # Number of blocks
+    vector_len = 65536   # Larger vector
+    BLOCK_SIZE = 16384   # Very large block size (will cause UB overflow on NPU)
+    CHUNK_SIZE = 1024    # Smaller chunk size for NPU (avoids UB overflow)
+    BLOCK_DIM = 4        # Number of blocks
 
     x = torch.randint(0, 100, (vector_len,), device=device, dtype=torch.int32)
     y = torch.randint(0, 100, (vector_len,), device=device, dtype=torch.int32)
 
-    # Test GPU-style kernel on NPU (may have UB overflow issues)
+    # Test GPU-style kernel on NPU (should have UB overflow issues)
     print("Testing GPU-style kernel on NPU (large single load)...")
+    print(f"     Attempting to load BLOCK_SIZE={BLOCK_SIZE} elements at once")
     z_gpu_style = torch.zeros((vector_len,), device=device, dtype=torch.int32)
     try:
         npu_vector_add_gpu_style_kernel[(BLOCK_DIM,)](x, y, z_gpu_style, vector_len, BLOCK_SIZE)
@@ -115,14 +116,16 @@ def run():
         expected = x + y
         torch.testing.assert_close(z_gpu_style, expected)
         print("==== GPU-style kernel: correctness check passed")
-        print("     Note: This kernel may cause UB overflow with larger BLOCK_SIZE")
+        print("     WARNING: This may indicate BLOCK_SIZE is still too small for UB overflow")
     except Exception as e:
-        print(f"==== GPU-style kernel failed (UB overflow): {e}")
+        print(f"==== GPU-style kernel FAILED (UB overflow detected): {type(e).__name__}")
+        print(f"     {str(e)[:200]}")
 
     print("\n")
 
     # Test NPU-optimized kernel (avoids UB overflow using loop)
     print("Testing NPU-optimized kernel (chunked load with loop)...")
+    print(f"     Loading data in chunks of CHUNK_SIZE={CHUNK_SIZE}")
     z_npu_opt = torch.zeros((vector_len,), device=device, dtype=torch.int32)
     npu_vector_add_optimized_kernel[(BLOCK_DIM,)](x, y, z_npu_opt, vector_len, BLOCK_SIZE, CHUNK_SIZE)
     torch.npu.synchronize()
@@ -131,12 +134,12 @@ def run():
     expected = x + y
     torch.testing.assert_close(z_npu_opt, expected)
     print("==== NPU-optimized kernel: correctness check passed")
-    print("     This kernel avoids UB overflow by processing data in chunks")
+    print("     Successfully avoided UB overflow by processing data in chunks")
 
     print("\n" + "=" * 80)
     print("Summary:")
     print("- GPU-style kernel: Loads large blocks in one shot (BLOCK_SIZE={})".format(BLOCK_SIZE))
-    print("                    May cause UB overflow on NPU with very large blocks")
+    print("                    FAILS on NPU due to UB overflow")
     print("- NPU-optimized kernel: Loads data in chunks (CHUNK_SIZE={})".format(CHUNK_SIZE))
     print("                        Avoids UB overflow by using loop-based approach")
     print("=" * 80)
