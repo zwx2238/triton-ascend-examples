@@ -26,6 +26,7 @@ import os
 import sys
 import numpy as np
 import torch
+import torch_npu
 import triton
 import triton.language as tl
 
