@@ -62,7 +62,7 @@ def npu_pick_gpu_style_kernel(
     val = tl.load(x_ptr + idx * stride_x, mask=mask)
 
     # Temporarily comment out store to test if load works
-    # tl.store(y_ptr + rn * stride_y, val, mask=mask)
+    tl.store(y_ptr + rn * stride_y, val)
 
 
 @triton.jit
@@ -95,7 +95,7 @@ def npu_pick_optimized_kernel(
     val = tl.gather(x_shared, idx, 0)
 
     # Temporarily comment out store to test if load/gather works
-    # tl.store(y_ptr + rn * stride_y, val, mask=mask)
+    tl.store(y_ptr + rn * stride_y, val)
 
 
 def run(kernel_name="optimized", result_paths=None):
